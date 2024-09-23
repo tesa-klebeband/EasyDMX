@@ -1,4 +1,8 @@
 # EasyDMX
+[![PlatformIO Registry](https://badges.registry.platformio.org/packages/tesa-klebeband/library/EasyDMX.svg)](https://registry.platformio.org/libraries/tesa-klebeband/EasyDMX)
+![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/tesa-klebeband/EasyDMX)
+![GitHub License](https://img.shields.io/github/license/tesa-klebeband/EasyDMX)
+
 EasyDMX is a library designed for sending and receiving DMX512 with an ESP32, aimed at providing simplicity and ease of use
 
 ## Features
