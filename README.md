@@ -3,6 +3,8 @@
 ![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/tesa-klebeband/EasyDMX)
 ![GitHub License](https://img.shields.io/github/license/tesa-klebeband/EasyDMX)
 
+![image](https://github.com/user-attachments/assets/2e123411-b053-4351-9662-d673952ae8de)
+
 EasyDMX is a library designed for sending and receiving DMX512 with an ESP32, aimed at providing simplicity and ease of use
 
 ## Features
