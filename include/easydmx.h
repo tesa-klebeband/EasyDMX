@@ -23,10 +23,21 @@
 #include <driver/uart.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <stdarg.h>
+#include <vector>
 
+#ifndef UART_NUM_2
+#define DMX_UART_NUM UART_NUM_1
+#else
 #define DMX_UART_NUM UART_NUM_2
-#define UART_BUF_SIZE 1024
+#endif
 
+#define UART_BUF_SIZE (1024 * 2)
+
+/**
+ * This enum represents the different modes the DMX driver can operate in.
+ * The mode determines whether the driver will transmit, receive or both transmit and receive DMX data.
+ */
 enum class DMXMode {
     Transmit,   // Transmit only
     Receive,    // Receive only
@@ -34,6 +45,10 @@ enum class DMXMode {
     BothKeepRx  // Both transmit and receive, but forbid writing to the transmit buffer and instead use the receive buffer for transmitting
 };
 
+/**
+ * This enum represents the different pins that can be used for DMX communication.
+ * The pins are used to configure the UART module for DMX communication.
+ */
 enum DMXPin {
     NoRx = 0,
     NoTx = 0,
@@ -41,14 +56,61 @@ enum DMXPin {
     Serial2Tx = 17   // Standard TX pin for Serial2
 };
 
+/**
+ * This enum represents the different states the DMX receiver can be in.
+ * The state determines whether the receiver is waiting for a break, start code or data.
+ */
 enum class DMXStateRx {
     Idle,   // Waiting for a break
     Break,  // Break received, waiting for the start code
     Data    // Receiving channels
 };
 
+/**
+ * This enum represents the different types of DMX channels.
+ * The values of the enum are used to identify the type of a channel in a DMXFixtureDescriptor.
+ */
+enum DMXChannelType {
+    None,   // No channel, this channel value is always 0 and cannot be changed
+    Dimmer,
+    Red,
+    Green,
+    Blue,
+    White,
+    Amber,
+    UV,
+    Strobe,
+    UVStrobe,
+    ColorWheel,
+    Pan,
+    Tilt,
+    PanFine,
+    TiltFine,
+    Zoom,
+    Focus,
+    Iris,
+    Shutter,
+    Speed,
+    Fog,
+    Rotation,
+    Prism,
+    PrismRotation,
+    Gobo,
+    GoboRotation,
+    Custom1,
+    Custom2,
+    Custom3,
+    Custom4,
+    Custom5,
+};
+
+/**
+ * The EasyDMX main class.
+ * This class provides functions to control DMX communication, send and receive DMX data and transmit Universes.
+ * Use begin(DMXMode mode, int rx_pin, int tx_pin) to initialize the DMX driver.
+ */
 class EasyDMX {
-   public:
+public:
     /**
      * Initializes the DMX driver with the given pins.
      * Two max485 modules are required if you want to both transmit and receive DMX data.
@@ -101,7 +163,7 @@ class EasyDMX {
      */
     uint8_t getChannelTx(int channel);
 
-   private:
+private:
     void* dmxTxTask();
     void* dmxRxTask();
     TaskHandle_t dmx_tx_task_handle;
@@ -112,6 +174,148 @@ class EasyDMX {
     uint8_t dmx_data_rx[513];
     DMXMode mode;
     QueueHandle_t uart_queue;
+};
+
+/**
+ * This class is used to describe a DMX fixture.
+ * The constructor takes a variable number of arguments, each representing a channel type.
+ * The order of the channel types represents the order of the channels in the fixture.
+ *
+ * Example:
+ *
+ * - DMXFixtureDescriptor descriptor(3, DMXChannelType::Red, DMXChannelType::Green, DMXChannelType::Blue);
+ *
+ * @param num_channels The number of channels the fixture has.
+ * @param va_list The list of channel types, each represented as a DMXChannelType.
+ */
+class DMXFixtureDescriptor {
+public:
+    DMXFixtureDescriptor(uint16_t num_channels, ...);
+
+    /**
+     * Destructor for the DMXFixtureDescriptor.
+     */
+    ~DMXFixtureDescriptor();
+
+private:
+    DMXChannelType* channel_types;
+    uint16_t num_channels;
+
+    friend class DMXFixture;
+    friend class DMXUniverse;
+};
+
+/**
+ * Constructs a DMX fixture with the given descriptor and start address.
+ * @param descriptor A pointer to the descriptor of the fixture. The descriptor must stay in scope for the entire lifetime of the fixture.
+ * @param address The address of the fixture. Must be between 1 and 512.
+ */
+class DMXFixture {
+public:
+    DMXFixture(DMXFixtureDescriptor* descriptor, uint16_t address);
+
+    /**
+     * Sets the value of all channels with the given type to the given value.
+     * @param type The type of the channels to set. Must be a valid DMXChannelType.
+     * @param value The value to set the channels to. Must be between 0 and 255.
+     */
+    void setChannel(DMXChannelType type, uint8_t value);
+
+    /**
+     * Sets the value of the channel at the given index.
+     * A call to setChannel(DMXChannelType, uint8_t) may overwrite the value set by this function.
+     * @param channel The index of the channel to set. Must be between 0 and the number of channels in the fixture.
+     */
+    inline void setChannel(uint16_t channel, uint8_t value) {
+        if (channel >= descriptor->num_channels) {
+            return;
+        }
+        channels[channel] = value;
+    }
+
+    /**
+     * Gets the value of the first channel with the given type.
+     * To retrieve the value of a specific channel independent of its type, use getChannel(int channel).
+     * @param type The type of the channel to get. Must be a valid DMXChannelType.
+     * @return The value of the channel as a uint8_t.
+     */
+    uint8_t getChannel(DMXChannelType type);
+
+    /**
+     * Gets the value of the channel at the given index.
+     * @param channel The index of the channel to get. Must be between 0 and the number of channels in the fixture.
+     * @return The value of the channel as a uint8_t.
+     */
+    inline uint8_t getChannel(uint16_t channel) {
+        if (channel >= descriptor->num_channels) {
+            return -1;
+        }
+        return channels[channel];
+    }
+
+    /**
+     * Changes the start address of the fixture.
+     * @param address The new address of the fixture.
+     */
+    inline void setAddress(uint16_t address) {
+        if (address < 1 || address > 512) {
+            return;
+        }
+        this->address = address;
+    }
+
+    /**
+     * Returns the start address of the fixture.
+     * @return The start address of the fixture.
+     */
+    inline uint16_t getAddress() {
+        return address;
+    }
+
+private:
+    DMXFixtureDescriptor* descriptor;
+    uint8_t* channels;
+    uint16_t address;
+
+    friend class DMXUniverse;
+};
+
+/**
+ * Constructs a DMX universe with the given EasyDMX instance.
+ * @param dmx A pointer to the EasyDMX instance to use for communication.
+ */
+class DMXUniverse {
+public:
+    DMXUniverse(EasyDMX* dmx);
+
+    /**
+     * Adds a fixture to the DMX universe.
+     * Fixtures have to stay in the object's scope the entire time. If a fixture is deleted or goes out of scope, it needs to be removed from the universe before that.
+     * @param fixture A pointer to the fixture to add.
+     */
+    void addFixture(DMXFixture* fixture);
+
+    /**
+     * Removes a fixture from the DMX universe by pointer.
+     * @param fixture A pointer to the fixture to remove. If the fixture is not in the universe, this function does nothing.
+     */
+    void removeFixture(DMXFixture* fixture);
+
+    /**
+     * Removes the fixture at the given address from the DMX universe.
+     * @param address The address of the fixture to remove.
+     */
+    void removeFixture(uint16_t address);
+
+    /**
+     * Updates the DMX universes data by going through all fixtures and updating their channels.
+     */
+    void update();
+
+private:
+    std::vector<DMXFixture*> fixtures;
+    EasyDMX* dmx;
+    uint8_t dmx_data[513];
 };
 
 #endif
