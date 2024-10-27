@@ -19,9 +19,33 @@
 #include <easydmx.h>
 
 /**
+ * List of UART numbers in descending order. This way the UART used typically for serial communication is used last.
+ * If 3 (for some chips only 2) EasyDMX instances are required, the Arduino Serial library shouldn't be used anymore.
+*/
+const int UART_MAP[] = {
+    #ifndef UART_NUM_2
+    UART_NUM_1,
+    UART_NUM_0
+    #else
+    UART_NUM_2,
+    UART_NUM_1,
+    UART_NUM_0
+    #endif
+};
+
+int next_uart = 0;
+int dmx_uart_num;
+
+/**
  * Starts the DMX driver with the given pins.
  */
-void EasyDMX::begin(DMXMode mode, int rx_pin, int tx_pin) {
+int EasyDMX::begin(DMXMode mode, int rx_pin, int tx_pin) {
+    if (next_uart >= sizeof(UART_MAP) / sizeof(UART_MAP[0])) {
+        return -1;
+    }
+
+    dmx_uart_num = UART_MAP[next_uart++];
+
     this->rx_pin = rx_pin;
     this->tx_pin = tx_pin;
     this->mode = mode;
@@ -33,9 +57,9 @@ void EasyDMX::begin(DMXMode mode, int rx_pin, int tx_pin) {
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_2,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
-        uart_param_config(DMX_UART_NUM, &uart_config);
-        uart_set_pin(DMX_UART_NUM, tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-        uart_driver_install(DMX_UART_NUM, UART_BUF_SIZE * 2, UART_BUF_SIZE * 2, 20, &uart_queue, 0);
+        uart_param_config(dmx_uart_num, &uart_config);
+        uart_set_pin(dmx_uart_num, tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        uart_driver_install(dmx_uart_num, UART_BUF_SIZE * 2, UART_BUF_SIZE * 2, 20, &uart_queue, 0);
 
         // Based on the operating mode, create the appropriate task
         if (mode == DMXMode::Transmit || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
@@ -115,13 +139,13 @@ uint8_t EasyDMX::getChannelTx(int channel) {
 void* EasyDMX::dmxTxTask() {
     uint8_t start_code = 0;
     while (true) {
-        uart_wait_tx_done(DMX_UART_NUM, 1000);                              // Wait for the UART to finish sending
-        uart_set_line_inverse(DMX_UART_NUM, UART_SIGNAL_TXD_INV);           // Invert the TX line for the break (LOW)
+        uart_wait_tx_done(dmx_uart_num, 1000);                              // Wait for the UART to finish sending
+        uart_set_line_inverse(dmx_uart_num, UART_SIGNAL_TXD_INV);           // Invert the TX line for the break (LOW)
         ets_delay_us(100);                                                  // Wait for the break to be sent
-        uart_set_line_inverse(DMX_UART_NUM, 0);                             // Revert the TX line back to normal (HIGH)
+        uart_set_line_inverse(dmx_uart_num, 0);                             // Revert the TX line back to normal (HIGH)
         ets_delay_us(14);                                                   // Wait for the Mark After Break (MAB) to finish
-        uart_write_bytes(DMX_UART_NUM, (const char*)&start_code, 1);        // Send the start code
-        uart_write_bytes(DMX_UART_NUM, (const char*)dmx_data_tx + 1, 512);  // Send the DMX data
+        uart_write_bytes(dmx_uart_num, (const char*)&start_code, 1);        // Send the start code
+        uart_write_bytes(dmx_uart_num, (const char*)dmx_data_tx + 1, 512);  // Send the DMX data
     }
 }
 
@@ -139,7 +163,7 @@ void* EasyDMX::dmxRxTask() {
         if (xQueueReceive(uart_queue, (void*)&event, portMAX_DELAY)) {           // Wait for an event to be received
             memset(data, 0, UART_BUF_SIZE);                                      // Clear the data buffer
             if (event.type == UART_DATA) {                                       // Check if the event is a data event
-                uart_read_bytes(DMX_UART_NUM, data, event.size, portMAX_DELAY);  // Read the data from the UART
+                uart_read_bytes(dmx_uart_num, data, event.size, portMAX_DELAY);  // Read the data from the UART
 
                 if (state == DMXStateRx::Break) {  // Handle a break, reset the state and the current address
                     if (data[0] == 0) {
@@ -158,7 +182,7 @@ void* EasyDMX::dmxRxTask() {
                     }
                 }
             } else {                                                                        // Either break, idle or other events (such as errors)
-                uart_flush(DMX_UART_NUM);                                                   // Flush the UART buffer
+                uart_flush(dmx_uart_num);                                                   // Flush the UART buffer
                 xQueueReset(uart_queue);                                                    // Reset the queue
                 state = (event.type == UART_BREAK) ? DMXStateRx::Break : DMXStateRx::Idle;  // Set the state based on the event type
             }

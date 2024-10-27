@@ -26,12 +26,6 @@
 #include <stdarg.h>
 #include <vector>
 
-#ifndef UART_NUM_2
-#define DMX_UART_NUM UART_NUM_1
-#else
-#define DMX_UART_NUM UART_NUM_2
-#endif
-
 #define UART_BUF_SIZE (1024 * 2)
 
 /**
@@ -132,8 +126,9 @@ public:
      * @param mode The mode of the DMX driver. Can be Transmit, Receive, Both or BothKeepRx. Depending on the mode, the pins can be set to NoRx or NoTx.
      * @param rx_pin The pin connected to the RO pin of the max485. If mode is set to Transmit, this pin has to be set to NoRx.
      * @param tx_pin The pin connected to the DI pin of the max485. If mode is set to Receive, this pin has to be set to NoTx.
+     * @return 0 if the initialization was successful, -1 otherwise.
      */
-    void begin(DMXMode mode, int rx_pin, int tx_pin);
+    int begin(DMXMode mode, int rx_pin, int tx_pin);
 
     /**
      * Stops the DMX driver and its associated tasks.
