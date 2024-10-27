@@ -21,16 +21,16 @@
 /**
  * List of UART numbers in descending order. This way the UART used typically for serial communication is used last.
  * If 3 (for some chips only 2) EasyDMX instances are required, the Arduino Serial library shouldn't be used anymore.
-*/
+ */
 const int UART_MAP[] = {
-    #ifndef UART_NUM_2
+#ifndef UART_NUM_2
     UART_NUM_1,
     UART_NUM_0
-    #else
+#else
     UART_NUM_2,
     UART_NUM_1,
     UART_NUM_0
-    #endif
+#endif
 };
 
 int next_uart = 0;
@@ -57,29 +57,31 @@ int EasyDMX::begin(DMXMode mode, int rx_pin, int tx_pin) {
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_2,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
-        uart_param_config(dmx_uart_num, &uart_config);
-        uart_set_pin(dmx_uart_num, tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-        uart_driver_install(dmx_uart_num, UART_BUF_SIZE * 2, UART_BUF_SIZE * 2, 20, &uart_queue, 0);
+    uart_param_config(dmx_uart_num, &uart_config);
+    uart_set_pin(dmx_uart_num, tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_driver_install(dmx_uart_num, UART_BUF_SIZE * 2, UART_BUF_SIZE * 2, 20, &uart_queue, 0);
 
-        // Based on the operating mode, create the appropriate task
-        if (mode == DMXMode::Transmit || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
-            xTaskCreatePinnedToCore([](void* pvParameters) {
-                EasyDMX* dmx = static_cast<EasyDMX*>(pvParameters);
-                dmx->dmxTxTask();
-            },
-            "dmxTxTask", 1024, this, 1, &dmx_tx_task_handle, 1);
-        }
+    // Based on the operating mode, create the appropriate task
+    if (mode == DMXMode::Transmit || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
+        xTaskCreatePinnedToCore([](void* pvParameters) {
+            EasyDMX* dmx = static_cast<EasyDMX*>(pvParameters);
+            dmx->dmxTxTask();
+        },
+                                "dmxTxTask", 1024, this, 1, &dmx_tx_task_handle, 1);
+    }
 
-        if (mode == DMXMode::Receive || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
-            xTaskCreatePinnedToCore([](void* pvParameters) {
-                EasyDMX* dmx = static_cast<EasyDMX*>(pvParameters);
-                dmx->dmxRxTask();
-            },
-            "dmxRxTask", 2048, this, 1, &dmx_rx_task_handle, 1);
-        }
+    if (mode == DMXMode::Receive || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
+        xTaskCreatePinnedToCore([](void* pvParameters) {
+            EasyDMX* dmx = static_cast<EasyDMX*>(pvParameters);
+            dmx->dmxRxTask();
+        },
+                                "dmxRxTask", 2048, this, 1, &dmx_rx_task_handle, 1);
+    }
 
-        memset(dmx_data_tx, 0, 513);
-        memset(dmx_data_rx, 0, 513);
+    memset(dmx_data_tx, 0, 513);
+    memset(dmx_data_rx, 0, 513);
+    
+    return 0;
 }
 
 /**
@@ -200,7 +202,7 @@ DMXFixtureDescriptor::DMXFixtureDescriptor(uint16_t num_channels, ...) {
     va_list args;
     va_start(args, num_channels);
     for (int i = 0; i < num_channels; i++) {
-        channel_types[i] = (DMXChannelType) va_arg(args, int);
+        channel_types[i] = (DMXChannelType)va_arg(args, int);
     }
     va_end(args);
 }
