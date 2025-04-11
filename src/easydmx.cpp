@@ -18,11 +18,11 @@
 
 #include <easydmx.h>
 
-/**
- * List of UART numbers in descending order. This way the UART used typically for serial communication is used last.
- * If 3 (for some chips only 2) EasyDMX instances are required, the Arduino Serial library shouldn't be used anymore.
- */
-const int UART_MAP[] = {
+ /**
+  * List of UART numbers in descending order. This way the UART used typically for serial communication is used last.
+  * If 3 (for some chips only 2) EasyDMX instances are required, the Arduino Serial library shouldn't be used anymore.
+  */
+const uart_port_t UART_MAP[] = {
 #ifndef UART_NUM_2
     UART_NUM_1,
     UART_NUM_0
@@ -34,12 +34,16 @@ const int UART_MAP[] = {
 };
 
 int next_uart = 0;
-int dmx_uart_num;
 
 /**
  * Starts the DMX driver with the given pins.
  */
 int EasyDMX::begin(DMXMode mode, int rx_pin, int tx_pin) {
+    if (initialized) {
+        return -1;
+    }
+    initialized = true;
+
     if (next_uart >= sizeof(UART_MAP) / sizeof(UART_MAP[0])) {
         return -1;
     }
@@ -56,31 +60,37 @@ int EasyDMX::begin(DMXMode mode, int rx_pin, int tx_pin) {
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_2,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE };
     uart_param_config(dmx_uart_num, &uart_config);
     uart_set_pin(dmx_uart_num, tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     uart_driver_install(dmx_uart_num, UART_BUF_SIZE * 2, UART_BUF_SIZE * 2, 20, &uart_queue, 0);
 
     // Based on the operating mode, create the appropriate task
     if (mode == DMXMode::Transmit || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
-        xTaskCreatePinnedToCore([](void* pvParameters) {
+        dmx_data_tx = (uint8_t*)malloc(513);
+        memset(dmx_data_tx, 0, 513);
+        dmx_tx_mutex = xSemaphoreCreateMutex();
+
+        xTaskCreate([](void* pvParameters) {
             EasyDMX* dmx = static_cast<EasyDMX*>(pvParameters);
             dmx->dmxTxTask();
-        },
-                                "dmxTxTask", 1024, this, 1, &dmx_tx_task_handle, 1);
+            },
+            "dmxTxTask", 1024, this, 1, &dmx_tx_task_handle);
     }
 
     if (mode == DMXMode::Receive || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
-        xTaskCreatePinnedToCore([](void* pvParameters) {
+        dmx_data_rx = (uint8_t*)malloc(513);
+        memset(dmx_data_rx, 0, 513);
+        rx_buffer = (uint8_t*)malloc(UART_BUF_SIZE);
+        dmx_rx_mutex = xSemaphoreCreateMutex();
+
+        xTaskCreate([](void* pvParameters) {
             EasyDMX* dmx = static_cast<EasyDMX*>(pvParameters);
             dmx->dmxRxTask();
-        },
-                                "dmxRxTask", 2048, this, 1, &dmx_rx_task_handle, 1);
+            },
+            "dmxRxTask", 2048, this, 1, &dmx_rx_task_handle);
     }
 
-    memset(dmx_data_tx, 0, 513);
-    memset(dmx_data_rx, 0, 513);
-    
     return 0;
 }
 
@@ -88,12 +98,26 @@ int EasyDMX::begin(DMXMode mode, int rx_pin, int tx_pin) {
  * Stops the DMX driver and its associated tasks.
  */
 void EasyDMX::end() {
+    if (!initialized) {
+        return;
+    }
+
     // Stop the tasks based on the operating mode
     if (mode == DMXMode::Transmit || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
         vTaskDelete(dmx_tx_task_handle);
-    } else if (mode == DMXMode::Receive || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
-        vTaskDelete(dmx_rx_task_handle);
+        free(dmx_data_tx);
+        dmx_data_tx = nullptr;
     }
+    if (mode == DMXMode::Receive || mode == DMXMode::Both || mode == DMXMode::BothKeepRx) {
+        vTaskDelete(dmx_rx_task_handle);
+        free(dmx_data_rx);
+        dmx_data_rx = nullptr;
+    }
+    
+    uart_driver_delete(dmx_uart_num);
+    free(rx_buffer);
+    rx_buffer = nullptr;
+    initialized = false;
 }
 
 /**
@@ -108,7 +132,11 @@ void EasyDMX::setChannel(int channel, uint8_t value) {
     if (channel < 1 || channel > 512) {
         return;
     }
-    dmx_data_tx[channel] = value;
+
+    if (xSemaphoreTake(dmx_tx_mutex, portMAX_DELAY)) {
+        dmx_data_tx[channel] = value;
+        xSemaphoreGive(dmx_tx_mutex);
+    }
 }
 
 /**
@@ -120,7 +148,12 @@ uint8_t EasyDMX::getChannel(int channel) {
         return 0;
     }
 
-    return dmx_data_rx[channel];
+    uint8_t value = 0;
+    if (xSemaphoreTake(dmx_rx_mutex, portMAX_DELAY)) {
+        value = dmx_data_rx[channel];
+        xSemaphoreGive(dmx_rx_mutex);
+    }
+    return value;
 }
 
 /**
@@ -132,58 +165,69 @@ uint8_t EasyDMX::getChannelTx(int channel) {
         return 0;
     }
 
-    return dmx_data_tx[channel];
+    uint8_t value = 0;
+    if (xSemaphoreTake(dmx_tx_mutex, portMAX_DELAY)) {
+        value = dmx_data_tx[channel];
+        xSemaphoreGive(dmx_tx_mutex);
+    }
+    return value;
 }
 
 /**
  * The task that sends the DMX data.
  */
-void* EasyDMX::dmxTxTask() {
+void EasyDMX::dmxTxTask() {
     uint8_t start_code = 0;
     while (true) {
-        uart_wait_tx_done(dmx_uart_num, 1000);                              // Wait for the UART to finish sending
-        uart_set_line_inverse(dmx_uart_num, UART_SIGNAL_TXD_INV);           // Invert the TX line for the break (LOW)
-        ets_delay_us(100);                                                  // Wait for the break to be sent
-        uart_set_line_inverse(dmx_uart_num, 0);                             // Revert the TX line back to normal (HIGH)
-        ets_delay_us(14);                                                   // Wait for the Mark After Break (MAB) to finish
-        uart_write_bytes(dmx_uart_num, (const char*)&start_code, 1);        // Send the start code
-        uart_write_bytes(dmx_uart_num, (const char*)dmx_data_tx + 1, 512);  // Send the DMX data
+        if (xSemaphoreTake(dmx_tx_mutex, portMAX_DELAY)) {
+            uart_wait_tx_done(dmx_uart_num, 1000);                              // Wait for the UART to finish sending
+            uart_set_line_inverse(dmx_uart_num, UART_SIGNAL_TXD_INV);           // Invert the TX line for the break (LOW)
+            ets_delay_us(100);                                                  // Wait for the break to be sent
+            uart_set_line_inverse(dmx_uart_num, 0);                             // Revert the TX line back to normal (HIGH)
+            ets_delay_us(14);                                                   // Wait for the Mark After Break (MAB) to finish
+            uart_write_bytes(dmx_uart_num, (const char*)&start_code, 1);        // Send the start code
+            uart_write_bytes(dmx_uart_num, (const char*)dmx_data_tx + 1, 512);  // Send the DMX data
+            xSemaphoreGive(dmx_tx_mutex);                                        // Release the mutex
+        }
     }
 }
 
 /**
  * The task that receives the DMX data.
  */
-void* EasyDMX::dmxRxTask() {
+void EasyDMX::dmxRxTask() {
     // Create the necessary structures and allocate memory
     uart_event_t event;
-    uint8_t* data = (uint8_t*)malloc(UART_BUF_SIZE);
     DMXStateRx state = DMXStateRx::Idle;
     int current_rx_addr = 0;
 
     while (true) {
-        if (xQueueReceive(uart_queue, (void*)&event, portMAX_DELAY)) {           // Wait for an event to be received
-            memset(data, 0, UART_BUF_SIZE);                                      // Clear the data buffer
-            if (event.type == UART_DATA) {                                       // Check if the event is a data event
-                uart_read_bytes(dmx_uart_num, data, event.size, portMAX_DELAY);  // Read the data from the UART
+        if (xQueueReceive(uart_queue, (void*)&event, portMAX_DELAY)) {                  // Wait for an event to be received
+            memset(rx_buffer, 0, UART_BUF_SIZE);                                        // Clear the receive buffer
+            if (event.type == UART_DATA) {                                              // Check if the event is a data event
+                uart_read_bytes(dmx_uart_num, rx_buffer, event.size, portMAX_DELAY);    // Read the data from the UART
 
                 if (state == DMXStateRx::Break) {  // Handle a break, reset the state and the current address
-                    if (data[0] == 0) {
+                    if (rx_buffer[0] == 0) {
                         state = DMXStateRx::Data;
                         current_rx_addr = 0;
                     }
                 }
                 if (state == DMXStateRx::Data) {  // Read the data to the current address in the buffer
-                    for (int i = 0; i < event.size; i++) {
-                        if (current_rx_addr < 513) {
-                            if (mode == DMXMode::BothKeepRx) {
-                                dmx_data_tx[current_rx_addr] = data[i];
+                    if (xSemaphoreTake(dmx_rx_mutex, portMAX_DELAY)) {
+                        for (int i = 0; i < event.size; i++) {
+                            if (current_rx_addr < 513) {
+                                if (mode == DMXMode::BothKeepRx) {
+                                    dmx_data_tx[current_rx_addr] = rx_buffer[i];
+                                }
+                                dmx_data_rx[current_rx_addr++] = rx_buffer[i];
                             }
-                            dmx_data_rx[current_rx_addr++] = data[i];
                         }
+                        xSemaphoreGive(dmx_rx_mutex);
                     }
                 }
-            } else {                                                                        // Either break, idle or other events (such as errors)
+            }
+            else {                                                                          // Either break, idle or other events (such as errors)
                 uart_flush(dmx_uart_num);                                                   // Flush the UART buffer
                 xQueueReset(uart_queue);                                                    // Reset the queue
                 state = (event.type == UART_BREAK) ? DMXStateRx::Break : DMXStateRx::Idle;  // Set the state based on the event type
@@ -273,9 +317,12 @@ void DMXUniverse::removeFixture(DMXFixture* fixture) {
  * Removes the fixture at the given address from the DMX universe.
  */
 void DMXUniverse::removeFixture(uint16_t address) {
-    for (int i = 0; i < fixtures.size(); i++) {
+    for (int i = 0; i < fixtures.size();) {
         if (fixtures[i]->getAddress() == address) {
             fixtures.erase(fixtures.begin() + i);
+        }
+        else { // In case of multiple fixtures with the same address this prevents skipping
+            i++;
         }
     }
 }

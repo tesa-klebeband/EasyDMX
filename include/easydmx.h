@@ -26,7 +26,7 @@
 #include <stdarg.h>
 #include <vector>
 
-#define UART_BUF_SIZE (1024 * 2)
+#define UART_BUF_SIZE 2048
 
 /**
  * This enum represents the different modes the DMX driver can operate in.
@@ -158,17 +158,29 @@ public:
      */
     uint8_t getChannelTx(int channel);
 
+    /**
+     * Destructor for the EasyDMX class.
+     */
+    ~EasyDMX() {
+        end();
+    }
+
 private:
-    void* dmxTxTask();
-    void* dmxRxTask();
+    void dmxTxTask();
+    void dmxRxTask();
     TaskHandle_t dmx_tx_task_handle;
     TaskHandle_t dmx_rx_task_handle;
     int rx_pin;
     int tx_pin;
-    uint8_t dmx_data_tx[513];
-    uint8_t dmx_data_rx[513];
+    uart_port_t dmx_uart_num;
+    uint8_t *dmx_data_tx;
+    uint8_t *dmx_data_rx;
+    uint8_t *rx_buffer;
+    SemaphoreHandle_t dmx_rx_mutex;
+    SemaphoreHandle_t dmx_tx_mutex;
     DMXMode mode;
     QueueHandle_t uart_queue;
+    bool initialized = false;
 };
 
 /**
