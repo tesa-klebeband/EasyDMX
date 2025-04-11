@@ -1,6 +1,6 @@
 {
   "name": "EasyDMX",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "EasyDMX is a library designed for sending and receiving DMX512 with an ESP32, aimed at providing simplicity and ease of use",
   "keywords": "dmx, stage, lighting",
   "repository":
